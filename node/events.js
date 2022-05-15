@@ -14,7 +14,7 @@ const fs = require('fs'),
   Hosts = require('./Hosts'),
   WsTokens = require('./WsTokens'),
   HostOperations = require('./HostOperations'),
-  Terminals = require('./Terminals'),
+  Terminals = require('./classes/Terminals'),
   VgaTerminals = require("./VgaTerminals"),
   AllowedProjects = require("./classes/AllowedProjects"),
   hosts = null,
@@ -109,8 +109,14 @@ app.get('/', function(req, res) {
 app.post('/terminals', function(req, res) {
   // Create a identifier for the console, this should allow multiple consolses
   // per user
-  let uuid = terminals.getInternalUuid(req.body.host, req.body.container, req.query.cols, req.query.rows);
-  res.json({ processId: uuid });
+  let terminalId = terminals.getNewTerminalId(req.body.user_id, req.body.hostId, req.body.project, req.body.instance, req.body.shell, req.query.cols, req.query.rows);
+  res.json({ terminalId: terminalId });
+  res.send();
+});
+
+app.post('/terminals/checkStatus', function(req, res) {
+  let status = terminals.checkStatus(req.body.user_id, req.body.terminalId);
+  res.json(status);
   res.send();
 });
 
@@ -184,32 +190,14 @@ app.ws('/node/operations', (socket, req) => {
 })
 
 app.ws('/node/console', (socket, req) => {
-     let host = req.query.hostId,
-         container = req.query.instance,
-         uuid = req.query.pid,
-         shell = req.query.shell,
-         project = req.query.project;
-  terminals
-    .createTerminalIfReq(socket, hosts.getHosts(), host, project, container, uuid, shell)
-    .then(() => {
-      //NOTE When user inputs from browser
-      socket.on("message", (msg) => {
-        let resizeCommand = msg.match(/resize-window\:cols=([0-9]+)&rows=([0-9]+)/);
-        if(resizeCommand){
-            terminals.resize(uuid, resizeCommand[1], resizeCommand[2])
-        }else{
-            terminals.sendToTerminal(uuid, msg);
-        }
-      });
-      socket.on('error', () => {
-          console.log("socket error");
-      });
-      socket.on('close', () => {
-          terminals.close(uuid);
-      });
-  }).catch(e => {
-      socket.close();
-  });
+  terminals.proxyTerminal(
+      req.query.terminalId,
+      socket,
+      hosts.getHosts(),
+
+  ).err(function(e){
+      console.log(e);
+  })
 });
 
 app.ws('/node/cloudConfig', (socket, req) => {
@@ -329,7 +317,7 @@ hosts = new Hosts(con, fs, http, https);
 allowedProjects = new AllowedProjects(con);
 wsTokens = new WsTokens(con);
 hostOperations = new HostOperations(hosts);
-terminals = new Terminals(http, https);
+terminals = new Terminals(http, https, hosts);
 vgaTerminals = new VgaTerminals(http, https, hosts);
 
 // Prevent races, just loads on init
